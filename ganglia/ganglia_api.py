@@ -342,12 +342,12 @@ class GangliaConfig:
         return self.env_service_dict.values()
 
     def get_gmetad_for(self, environment, service):
-        def isMatch(gmetad):
+        def is_match(gmetad):
             env_match = (not environment) or (gmetad.environment in environment)
             service_match = (not service) or (gmetad.service in service)
             return env_match and service_match
 
-        return filter(isMatch, self.env_service_dict.values())
+        return filter(is_match, self.env_service_dict.values())
 
 
 class GmetadData():
@@ -405,18 +405,17 @@ class ApiHandler(tornado.web.RequestHandler):
         def emptyOrContains(list, value):
             return len(list) == 0 or value in list
 
-        def isMatch(metric):
-            match = emptyOrContains(metric_list, metric.name)
-            match = match and emptyOrContains(group_list, metric.group)
-            match = match and emptyOrContains(host_list, metric.host.name)
-            match = match and emptyOrContains(cluster_list, metric.cluster.name)
-            return match
+        def is_match(metric):
+            return emptyOrContains(metric_list, metric.name) \
+                and emptyOrContains(group_list, metric.group) \
+                and emptyOrContains(host_list, metric.host.name) \
+                and emptyOrContains(cluster_list, metric.cluster.name)
 
         gmetad_list = ganglia_config.get_gmetad_for(environment, service)
         metric_dicts = list()
         for gmetad in gmetad_list:
             metrics = ganglia_data.metrics(gmetad)
-            for metric in filter(isMatch, metrics):
+            for metric in filter(is_match, metrics):
                 metric_dicts.append(metric.api_dict())
 
         output_dict = {
