@@ -406,10 +406,10 @@ class ApiHandler(tornado.web.RequestHandler):
             return len(list) == 0 or value in list
 
         def is_match(metric):
-            return emptyOrContains(metric_list, metric.name) \
-                and emptyOrContains(group_list, metric.group) \
-                and emptyOrContains(host_list, metric.host.name) \
-                and emptyOrContains(cluster_list, metric.cluster.name)
+            return (emptyOrContains(metric_list, metric.name) 
+                and emptyOrContains(group_list, metric.group) 
+                and emptyOrContains(host_list, metric.host.name) 
+                and emptyOrContains(cluster_list, metric.cluster.name))
 
         gmetad_list = ganglia_config.get_gmetad_for(environment, service)
         metric_dicts = list()
