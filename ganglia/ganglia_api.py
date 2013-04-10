@@ -5,7 +5,7 @@
 #
 ########################################
 
-from settings import LOGFILE, PIDFILE, API_SERVER, HEARTBEAT
+from settings import LOGFILE, PIDFILE, API_SERVER, HEARTBEAT, TIMEOUT, MAX_WORKERS
 
 import os
 import sys
@@ -27,6 +27,7 @@ import tornado.options
 import tornado.web
 from tornado.options import define, options
 
+import futures
 
 __version__ = '1.0.16'
 
@@ -370,6 +371,10 @@ class GmetadData():
     def metrics(self, gmetad):
         return self.metrics_for(gmetad.environment, gmetad.service)
 
+def update_metrics(ganglia_data, gmetad):
+    results = ganglia_data.update(gmetad)
+    logger.info("Results from metric reading %s", results)
+    return results
 
 class GangliaPollThread(Thread):
     def run(self):
@@ -380,11 +385,12 @@ class GangliaPollThread(Thread):
         gmetad_list = ganglia_config.get_gmetad_config()
         logger.info("Updating data from gmetad...")
         total_metrics = 0
-        for counter, gmetad in enumerate(gmetad_list):
-            metrics_for_gmetad = ganglia_data.update(gmetad)
-            total_metrics += metrics_for_gmetad
-            logger.debug("  (%d/%d) updated %d metrics for %s %s", counter + 1, len(gmetad_list), metrics_for_gmetad,
-                         gmetad.environment, gmetad.service)
+        with futures.ProcessPoolExecutor(max_workers = MAX_WORKERS) as executor:
+            fs = [executor.submit(update_metrics, ganglia_data, gmetad) for gmetad in gmetad_list]
+
+            for future in futures.as_completed(fs):
+                total_metrics += future.result()
+
             time.sleep(0.2)
 
         logger.info("Done (found %d metrics)", total_metrics)
