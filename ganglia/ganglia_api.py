@@ -355,12 +355,9 @@ class GmetadData():
     def __init__(self):
         self.data = dict()
 
-    def update(self, gmetad):
-        logger.info("  getting metrics for %s %s", gmetad.environment, gmetad.service)
-        gmetad_metrics = gmetad.read_metrics()
-        logger.info("  updated %d metrics for %s %s", len(gmetad_metrics), gmetad.environment, gmetad.service)
+    def update(self, gmetad, new_metrics):
         self.data[(gmetad.environment, gmetad.service)] = gmetad_metrics
-        return len(gmetad_metrics)
+        logger.info("  stored %d metrics for %s %s", len(new_metrics), gmetad.environment, gmetad.service)
 
     def metrics_for(self, environment, service):
         try:
@@ -371,10 +368,19 @@ class GmetadData():
     def metrics(self, gmetad):
         return self.metrics_for(gmetad.environment, gmetad.service)
 
+def poll_metrics(gmetad):
+    logger.info("  polling metrics for %s %s", gmetad.environment, gmetad.service)
+    gmetad_metrics = gmetad.read_metrics()
+    logger.info("  retrieved %d metrics for %s %s", len(gmetad_metrics), gmetad.environment, gmetad.service)
+    return {'metrics': gmetad_metrics, 'gmetad': gmetad}
+
+def store_metrics(ganglia_data, metrics_data):
+    ganglia_data.update(metrics_data['gmetad'], metrics_data['metrics'])
+
 def update_metrics(ganglia_data, gmetad):
-    results = ganglia_data.update(gmetad)
-    logger.info("Results from metric reading %s", results)
-    return results
+    metrics_data = poll_metrics(gmetad)
+    store_metrics(ganglia_data, metrics_data)
+    return len(new_metrics['metrics'])
 
 class GangliaPollThread(Thread):
     def run(self):
@@ -386,10 +392,12 @@ class GangliaPollThread(Thread):
         logger.info("Updating data from gmetad...")
         total_metrics = 0
         with futures.ProcessPoolExecutor(max_workers = MAX_WORKERS) as executor:
-            fs = [executor.submit(update_metrics, ganglia_data, gmetad) for gmetad in gmetad_list]
+            fs = [executor.submit(poll_metrics, gmetad) for gmetad in gmetad_list]
 
             for future in futures.as_completed(fs):
-                total_metrics += future.result()
+                metrics = future.result()
+                store_metrics(ganglia_data, metrics)
+                total_metrics += len(metrics['metrics'])
 
             time.sleep(0.2)
 
