@@ -27,7 +27,7 @@ import tornado.options
 import tornado.web
 from tornado.options import define, options
 
-import futures
+from concurrent import futures
 
 __version__ = '1.0.16'
 
