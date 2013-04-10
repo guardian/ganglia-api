@@ -31,6 +31,18 @@ We also assume that /var/log/ganglia-api.log is writable and we can create
 That being the case you should be able to run the python app on the command line
 and it will listen by default on port 8080. 
 
+### Setup
+
+	virtualenv ve
+	source ve/bin/activate
+	pip install -r requirements.txt
+
+Edit `ganglia_api.py` to import dev_settings rather than settings.
+
+	python ganglia/ganglia_api.py
+
+The API should now be running on port 8080.
+
 The API
 -------
 

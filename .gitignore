@@ -1,3 +1,6 @@
 *.iml
 .idea/
 *.xml
+ve
+*.pyc
+*.pyo
