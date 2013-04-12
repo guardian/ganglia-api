@@ -4,3 +4,4 @@
 ve
 *.pyc
 *.pyo
+.venv/

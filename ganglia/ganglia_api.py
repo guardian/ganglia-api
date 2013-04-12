@@ -356,7 +356,7 @@ class GmetadData():
         self.data = dict()
 
     def update(self, gmetad, new_metrics):
-        self.data[(gmetad.environment, gmetad.service)] = gmetad_metrics
+        self.data[(gmetad.environment, gmetad.service)] = new_metrics
         logger.info("  stored %d metrics for %s %s", len(new_metrics), gmetad.environment, gmetad.service)
 
     def metrics_for(self, environment, service):
@@ -372,15 +372,15 @@ def poll_metrics(gmetad):
     logger.info("  polling metrics for %s %s", gmetad.environment, gmetad.service)
     gmetad_metrics = gmetad.read_metrics()
     logger.info("  retrieved %d metrics for %s %s", len(gmetad_metrics), gmetad.environment, gmetad.service)
-    return {'metrics': gmetad_metrics, 'gmetad': gmetad}
+    return {'data': gmetad_metrics, 'gmetad': gmetad}
 
-def store_metrics(ganglia_data, metrics_data):
-    ganglia_data.update(metrics_data['gmetad'], metrics_data['metrics'])
+def store_metrics(ganglia_data, metrics):
+    ganglia_data.update(metrics['gmetad'], metrics['data'])
 
 def update_metrics(ganglia_data, gmetad):
-    metrics_data = poll_metrics(gmetad)
-    store_metrics(ganglia_data, metrics_data)
-    return len(new_metrics['metrics'])
+    metrics = poll_metrics(gmetad)
+    store_metrics(ganglia_data, metrics)
+    return len(metrics['data'])
 
 class GangliaPollThread(Thread):
     def run(self):
@@ -397,7 +397,7 @@ class GangliaPollThread(Thread):
             for future in futures.as_completed(fs):
                 metrics = future.result()
                 store_metrics(ganglia_data, metrics)
-                total_metrics += len(metrics['metrics'])
+                total_metrics += len(metrics['data'])
 
             time.sleep(0.2)
 
