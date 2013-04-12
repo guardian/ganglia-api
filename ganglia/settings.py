@@ -8,3 +8,5 @@ HEARTBEAT=True
 
 MAX_WORKERS=3
 TIMEOUT=90
+
+GANGLIA_PATH='/etc/ganglia'

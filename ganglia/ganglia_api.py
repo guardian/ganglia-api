@@ -5,7 +5,7 @@
 #
 ########################################
 
-from settings import LOGFILE, PIDFILE, API_SERVER, HEARTBEAT, TIMEOUT, MAX_WORKERS
+from settings import LOGFILE, PIDFILE, API_SERVER, HEARTBEAT, MAX_WORKERS, GANGLIA_PATH
 
 import os
 import sys
@@ -307,15 +307,13 @@ class GangliaGmetad:
 
 
 class GangliaConfig:
-    GANGLIA_PATH = '/etc/ganglia'
+    def __init__(self, config_path):
+        self.env_service_dict = self.parse_ganglia_config(config_path)
 
-    def __init__(self):
-        self.env_service_dict = self.parse_ganglia_config()
-
-    def parse_ganglia_config(self):
+    def parse_ganglia_config(self, config_path):
         logger.info("Parsing ganglia configurations")
         result = dict()
-        for file in glob.glob(os.path.join(GangliaConfig.GANGLIA_PATH, 'gmetad-*-*.conf')):
+        for file in glob.glob(os.path.join(config_path, 'gmetad-*-*.conf')):
             m = re.search('gmetad-(\S+)-(\S+).conf', file)
             environment = m.group(1)
             service = m.group(2)
@@ -383,12 +381,17 @@ def update_metrics(ganglia_data, gmetad):
     return len(metrics['data'])
 
 class GangliaPollThread(Thread):
+    def __init__(self, config, data):
+        self.config = config
+        self.data = data
+
     def run(self):
         while True:
-            self.update_ganglia_data()
+            gmetad_list = self.config.get_gmetad_config()
+            self.update_ganglia_data(gmetad_list)
+            time.sleep(1)
 
-    def update_ganglia_data(self):
-        gmetad_list = ganglia_config.get_gmetad_config()
+    def update_ganglia_data(self, gmetad_list):
         logger.info("Updating data from gmetad...")
         total_metrics = 0
         with futures.ProcessPoolExecutor(max_workers = MAX_WORKERS) as executor:
@@ -396,10 +399,8 @@ class GangliaPollThread(Thread):
 
             for future in futures.as_completed(fs):
                 metrics = future.result()
-                store_metrics(ganglia_data, metrics)
+                store_metrics(self.data, metrics)
                 total_metrics += len(metrics['data'])
-
-            time.sleep(0.2)
 
         logger.info("Done (found %d metrics)", total_metrics)
         if HEARTBEAT:
@@ -407,6 +408,10 @@ class GangliaPollThread(Thread):
 
 
 class ApiHandler(tornado.web.RequestHandler):
+    def __init__(self, config, data):
+        self.config = config
+        self.data = data
+
     def get(self):
         start = time.time()
         environment = self.get_arguments("environment")
@@ -426,10 +431,10 @@ class ApiHandler(tornado.web.RequestHandler):
             match = match and emptyOrContains(cluster_list, metric.cluster.name)
             return match
 
-        gmetad_list = ganglia_config.get_gmetad_for(environment, service)
+        gmetad_list = self.config.get_gmetad_for(environment, service)
         metric_dicts = list()
         for gmetad in gmetad_list:
-            metrics = ganglia_data.metrics(gmetad)
+            metrics = self.data.metrics(gmetad)
             for metric in filter(isMatch, metrics):
                 metric_dicts.append(metric.api_dict())
 
@@ -457,18 +462,16 @@ def main():
             pass
     file(PIDFILE, 'w').write(str(os.getpid()))
 
-    global ganglia_config
-    ganglia_config = GangliaConfig()
-
-    global ganglia_data
+    ganglia_config = GangliaConfig(GANGLIA_PATH)
     ganglia_data = GmetadData()
-    poll_thread = GangliaPollThread()
+
+    poll_thread = GangliaPollThread(ganglia_config, ganglia_data)
     poll_thread.daemon = True
     poll_thread.start()
 
     tornado.options.parse_command_line()
     application = tornado.web.Application([
-        (r"/ganglia/api/v1/metrics", ApiHandler),
+        (r"/ganglia/api/v1/metrics", ApiHandler(ganglia_config, ganglia_data)),
     ])
     http_server = tornado.httpserver.HTTPServer(application)
     http_server.listen(options.port)
