@@ -5,8 +5,6 @@
 #
 ########################################
 
-from settings import LOGFILE, PIDFILE, API_SERVER, HEARTBEAT
-
 import os
 import sys
 import glob
@@ -27,13 +25,15 @@ import tornado.options
 import tornado.web
 from tornado.options import define, options
 
+import settings
 
-__version__ = '1.0.16'
+__version__ = '2.0.0'
 
 define("port", default=8080, help="run on the given port", type=int)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s[%(process)d] %(levelname)s - %(message)s",
-                    filename=LOGFILE)
+logging.basicConfig(level=logging.DEBUG if settings.DEBUG else logging.INFO,
+                    format="%(asctime)s %(name)s[%(process)d] %(levelname)s - %(message)s",
+                    filename=settings.LOGFILE)
 global logger
 logger = logging.getLogger("ganglia-api")
 
@@ -62,7 +62,7 @@ class ApiMetric:
     def api_dict(self):
         type, units = ApiMetric.metric_type(self.type, self.units, self.slope)
         metric = {'environment': self.environment,
-                  'service': self.grid.name,
+                  'grid': self.grid.name,
                   'cluster': self.cluster.name,
                   'host': self.host.name,
                   'id': self.id(),
@@ -85,14 +85,7 @@ class ApiMetric:
 
     @staticmethod
     def parse_tags(tag_string):
-        if tag_string is None:
-            return None
-        else:
-            tags = ApiMetric.tag_re.split(tag_string)
-            if "unspecified" in tags:
-                return list()
-            else:
-                return tags
+        return tag_string.split(',')
 
     @staticmethod
     def metric_type(type, units, slope):
@@ -148,11 +141,11 @@ class Metric(Elem, ApiMetric):
                 self.metadata['INSTANCE'] = '/' + '/'.join(self.instance.split('-'))
 
         params = {"environment": self.environment,
-                  "service": self.grid.name,
+                  "grid": self.grid.name,
                   "cluster": self.cluster.name,
                   "host": self.host.name,
                   "metric": original_metric_name}
-        url = '%s/ganglia/api/v1/metrics?' % API_SERVER
+        url = '%s%s/metrics?' % (settings.API_SERVER, settings.BASE_URL)
         for (k, v) in params.items():
             if v is not None: url += "&%s=%s" % (k, quote(v))
         self.data_url = url
@@ -207,9 +200,8 @@ class HeartbeatMetric(ApiMetric):
 class GangliaGmetad:
     hostname = "localhost"
 
-    def __init__(self, environment, service, xml_port, interactive_port):
+    def __init__(self, environment, xml_port, interactive_port):
         self.environment = environment
-        self.service = service
         self.xml_port = xml_port
         self.interactive_port = interactive_port
 
@@ -306,18 +298,19 @@ class GangliaGmetad:
 
 
 class GangliaConfig:
-    GANGLIA_PATH = '/etc/ganglia'
 
     def __init__(self):
-        self.env_service_dict = self.parse_ganglia_config()
+        self.environments = self.parse_ganglia_config()
 
     def parse_ganglia_config(self):
         logger.info("Parsing ganglia configurations")
         result = dict()
-        for file in glob.glob(os.path.join(GangliaConfig.GANGLIA_PATH, 'gmetad-*-*.conf')):
-            m = re.search('gmetad-(\S+)-(\S+).conf', file)
-            environment = m.group(1)
-            service = m.group(2)
+        for file in glob.glob(os.path.join(settings.GANGLIA_PATH, 'gmetad*.conf')):
+            m = re.search('gmetad-(\S+).conf', file)
+            if m:
+                environment = m.group(1)
+            else:
+                environment = 'Production'
 
             xml_port = 0
             interactive_port = 0
@@ -330,24 +323,21 @@ class GangliaConfig:
                 if m:
                     interactive_port = int(m.group(1))
 
-            ports = GangliaGmetad(environment, service, xml_port, interactive_port)
+            ports = GangliaGmetad(environment, xml_port, interactive_port)
 
-            result[(environment, service)] = ports
-            logger.info('Found gmetad-%s-%s.conf with ports %d and %d', environment, service, ports.xml_port,
-                        ports.interactive_port)
+            result[environment] = ports
+            logger.info('Found %s (env=%s) with ports %d and %d', file, environment, ports.xml_port, ports.interactive_port)
 
         return result
 
     def get_gmetad_config(self):
-        return self.env_service_dict.values()
+        return self.environments.values()
 
-    def get_gmetad_for(self, environment, service):
+    def get_gmetad_for(self, environment):
         def is_match(gmetad):
-            env_match = (not environment) or (gmetad.environment in environment)
-            service_match = (not service) or (gmetad.service in service)
-            return env_match and service_match
+            return (not environment) or (gmetad.environment in environment)
 
-        return filter(is_match, self.env_service_dict.values())
+        return filter(is_match, self.environments.values())
 
 
 class GmetadData():
@@ -355,20 +345,20 @@ class GmetadData():
         self.data = dict()
 
     def update(self, gmetad):
-        logger.info("  getting metrics for %s %s", gmetad.environment, gmetad.service)
+        logger.info("  getting metrics for %s", gmetad.environment)
         gmetad_metrics = gmetad.read_metrics()
-        logger.info("  updated %d metrics for %s %s", len(gmetad_metrics), gmetad.environment, gmetad.service)
-        self.data[(gmetad.environment, gmetad.service)] = gmetad_metrics
+        logger.info("  updated %d metrics for %s", len(gmetad_metrics), gmetad.environment)
+        self.data[gmetad.environment] = gmetad_metrics
         return len(gmetad_metrics)
 
-    def metrics_for(self, environment, service):
+    def metrics_for(self, environment):
         try:
-            return self.data[(environment, service)]
+            return self.data[environment]
         except KeyError:
             return list()
 
     def metrics(self, gmetad):
-        return self.metrics_for(gmetad.environment, gmetad.service)
+        return self.metrics_for(gmetad.environment)
 
 
 class GangliaPollThread(Thread):
@@ -383,20 +373,18 @@ class GangliaPollThread(Thread):
         for counter, gmetad in enumerate(gmetad_list):
             metrics_for_gmetad = ganglia_data.update(gmetad)
             total_metrics += metrics_for_gmetad
-            logger.debug("  (%d/%d) updated %d metrics for %s %s", counter + 1, len(gmetad_list), metrics_for_gmetad,
-                         gmetad.environment, gmetad.service)
+            logger.debug("  (%d/%d) updated %d metrics for %s", counter + 1, len(gmetad_list), metrics_for_gmetad,
+                         gmetad.environment)
             time.sleep(0.2)
 
         logger.info("Done (found %d metrics)", total_metrics)
-        if HEARTBEAT:
-            os.system('/opt/alerta/sbin/alert-sender.py --heartbeat --origin ganglia-api --tag %s --quiet' % __version__)
 
 
 class ApiHandler(tornado.web.RequestHandler):
     def get(self):
         start = time.time()
         environment = self.get_arguments("environment")
-        service = self.get_arguments("service")
+        grid = self.get_arguments("grid")
         metric_list = self.get_arguments("metric")
         group_list = self.get_arguments("group")
         host_list = self.get_arguments("host")
@@ -406,41 +394,42 @@ class ApiHandler(tornado.web.RequestHandler):
             return len(list) == 0 or value in list
 
         def is_match(metric):
-            return (emptyOrContains(metric_list, metric.name) 
-                and emptyOrContains(group_list, metric.group) 
-                and emptyOrContains(host_list, metric.host.name) 
-                and emptyOrContains(cluster_list, metric.cluster.name))
+            return (emptyOrContains(metric_list, metric.name)
+                and emptyOrContains(group_list, metric.group)
+                and emptyOrContains(host_list, metric.host.name)
+                and emptyOrContains(cluster_list, metric.cluster.name)
+                and emptyOrContains(grid, metric.grid.name))
 
-        gmetad_list = ganglia_config.get_gmetad_for(environment, service)
+        gmetad_list = ganglia_config.get_gmetad_for(environment)
         metric_dicts = list()
         for gmetad in gmetad_list:
             metrics = ganglia_data.metrics(gmetad)
             for metric in filter(is_match, metrics):
                 metric_dicts.append(metric.api_dict())
 
-        output_dict = {
+        response = {
             "metrics": metric_dicts,
             "status": "ok",
             "total": len(metric_dicts),
             "localTime": datetime.datetime.now().isoformat(),
             "time": "%.3f" % (time.time() - start)
         }
-        self.write({"response": output_dict})
+        self.write(response)
 
 
 def main():
     logger.info("Starting up Ganglia metric API v%s", __version__)
 
     # Write pid file if not already running
-    if os.path.isfile(PIDFILE):
-        pid = open(PIDFILE).read()
+    if os.path.isfile(settings.PIDFILE):
+        pid = open(settings.PIDFILE).read()
         try:
             os.kill(int(pid), 0)
             logging.error('Process with pid %s already exists, exiting', pid)
             sys.exit(1)
         except OSError:
             pass
-    file(PIDFILE, 'w').write(str(os.getpid()))
+    file(settings.PIDFILE, 'w').write(str(os.getpid()))
 
     global ganglia_config
     ganglia_config = GangliaConfig()
@@ -453,7 +442,7 @@ def main():
 
     tornado.options.parse_command_line()
     application = tornado.web.Application([
-        (r"/ganglia/api/v1/metrics", ApiHandler),
+        (r"%s/metrics" % settings.BASE_URL, ApiHandler),
     ])
     http_server = tornado.httpserver.HTTPServer(application)
     http_server.listen(options.port)
