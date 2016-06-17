@@ -310,7 +310,7 @@ class GangliaConfig:
             if m:
                 environment = m.group(1)
             else:
-                environment = 'Production'
+                environment = 'all'
 
             xml_port = 0
             interactive_port = 0
@@ -411,7 +411,6 @@ class ApiHandler(tornado.web.RequestHandler):
             "metrics": metric_dicts,
             "status": "ok",
             "total": len(metric_dicts),
-            "localTime": datetime.datetime.now().isoformat(),
             "time": "%.3f" % (time.time() - start)
         }
         self.write(response)
